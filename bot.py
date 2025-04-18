@@ -1,9 +1,9 @@
 import logging
 import os
-import json # Додано для майбутнього збереження/завантаження даних
+import json
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup # Додано кнопки
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler # Додано обробник кнопок
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from flask import Flask
 from threading import Thread
 
@@ -32,9 +32,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Перевірки змінних (залишаємо як є)
 if not TELEGRAM_BOT_TOKEN: logger.error("Не знайдено TELEGRAM_BOT_TOKEN!"); exit()
-if not OPENAI_API_KEY: logger.warning("Не знайдено OPENAI_API_KEY! Транскрипція не працюватиме.") # Змінено на warning
+if not OPENAI_API_KEY: logger.warning("Не знайдено OPENAI_API_KEY! Транскрипція не працюватиме.")
 if not ADMIN_USER_ID: logger.error("Не знайдено ADMIN_USER_ID!"); exit()
 try:
     ADMIN_USER_ID = int(ADMIN_USER_ID)
@@ -42,14 +41,10 @@ except ValueError:
     logger.error("ADMIN_USER_ID має бути числом!"); exit()
 
 # --- Керування користувачами ---
-# Словник для зберігання статусів користувачів (user_id: status)
-# status: "approved", "pending", "rejected"
+user_status = {} # user_id: status ("approved", "pending", "rejected")
 # TODO: Завантажувати/зберігати цей словник у файл
-user_status = {}
 
-# Функція для побудови клавіатури адміністратора
 def get_admin_keyboard(user_id_to_manage: int) -> InlineKeyboardMarkup:
-    """Створює клавіатуру з кнопками Схвалити/Відхилити."""
     keyboard = [
         [
             InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{user_id_to_manage}"),
@@ -58,9 +53,7 @@ def get_admin_keyboard(user_id_to_manage: int) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# Оновлена функція-обробник для команди /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробляє команду /start, перевіряє статус користувача та надсилає запит адміну."""
     user = update.effective_user
     user_id = user.id
     username = user.username or "N/A"
@@ -70,29 +63,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info(f"Користувач {user_id} ({username}, {full_name}) запустив /start.")
 
-    # Перевіряємо статус користувача
     status = user_status.get(user_id)
 
     if status == "approved":
         logger.info(f"Користувач {user_id} вже схвалений.")
         await update.message.reply_text("Ви вже маєте доступ. Можете надсилати аудіо для транскрипції.")
-        # Тут можна додати інструкції, як надсилати аудіо
     elif status == "rejected":
         logger.info(f"Користувач {user_id} раніше був відхилений.")
         await update.message.reply_text("На жаль, ваш запит на доступ було відхилено.")
     elif status == "pending":
         logger.info(f"Користувач {user_id} вже очікує на схвалення.")
         await update.message.reply_text("Ваш запит на доступ вже надіслано адміністратору. Будь ласка, зачекайте.")
-    else: # Новий користувач
+    else:
         logger.info(f"Новий користувач {user_id}. Надсилаємо запит адміністратору {ADMIN_USER_ID}.")
-        user_status[user_id] = "pending" # Позначаємо як очікуючого
+        user_status[user_id] = "pending"
 
         await update.message.reply_html(
             rf"Привіт, {user.mention_html()}! Ваш запит на доступ до бота надіслано адміністратору. "
             "Ви отримаєте сповіщення, як тільки його розглянуть."
         )
 
-        # Надсилаємо повідомлення адміністратору
         try:
             admin_message = (
                 f"🔔 Новий запит на доступ!\n\n"
@@ -106,28 +96,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 chat_id=ADMIN_USER_ID,
                 text=admin_message,
                 reply_markup=keyboard,
-                parse_mode='Markdown' # Використовуємо Markdown для форматування ID
+                parse_mode='Markdown'
             )
             logger.info(f"Повідомлення адміністратору про {user_id} надіслано.")
         except Exception as e:
             logger.error(f"Не вдалося надіслати повідомлення адміністратору ({ADMIN_USER_ID}): {e}")
-            # Можливо, варто повідомити користувача про проблему?
             await update.message.reply_text("Виникла помилка при надсиланні запиту адміністратору. Спробуйте пізніше.")
-            del user_status[user_id] # Видаляємо статус, якщо не вдалося повідомити адміна
+            # Перевірка чи існує ключ перед видаленням
+            if user_id in user_status:
+                 del user_status[user_id]
 
-# Функція-обробник для натискання кнопок адміністратором
+
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробляє натискання кнопок Схвалити/Відхилити."""
     query = update.callback_query
-    await query.answer() # Важливо відповісти на запит, щоб кнопка перестала "крутитися"
+    await query.answer()
 
     admin_user = query.from_user
     if admin_user.id != ADMIN_USER_ID:
         logger.warning(f"Спроба використання адмін-кнопки користувачем {admin_user.id}!")
-        await query.edit_message_text(text="Помилка: Ви не адміністратор.")
+        # Не редагуємо повідомлення, якщо це не адмін, щоб не викликати помилку
         return
 
-    # Розбираємо дані з кнопки (наприклад, "approve_123456789")
     action, user_id_str = query.data.split('_', 1)
     try:
         user_id_to_manage = int(user_id_str)
@@ -136,13 +125,15 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(text="Помилка: Некоректні дані.")
         return
 
-    original_message = query.message.text # Зберігаємо оригінальний текст повідомлення
+    original_message = query.message.text
 
     if action == "approve":
         logger.info(f"Адміністратор {admin_user.id} схвалив користувача {user_id_to_manage}.")
         user_status[user_id_to_manage] = "approved"
-        await query.edit_message_text(text=f"{original_message}\n\n✅ Доступ надано користувачу `{user_id_to_manage}`.", parse_mode='Markdown')
-        # Повідомляємо користувача
+        await query.edit_message_text(
+            text=f"{original_message}\n\n✅ Доступ надано користувачу `{user_id_to_manage}`.",
+            parse_mode='Markdown'
+        ) # <--- ВИПРАВЛЕНО: Додано закриваючу дужку )
         try:
             await context.bot.send_message(
                 chat_id=user_id_to_manage,
@@ -154,4 +145,48 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "reject":
         logger.info(f"Адміністратор {admin_user.id} відхилив користувача {user_id_to_manage}.")
         user_status[user_id_to_manage] = "rejected"
-        await query.edit_message_text(text=
+        await query.edit_message_text(
+            text=f"{original_message}\n\n❌ Доступ відхилено для користувача `{user_id_to_manage}`.",
+            parse_mode='Markdown'
+        ) # <--- ВИПРАВЛЕНО: Додано закриваючу дужку )
+        try:
+            await context.bot.send_message(
+                chat_id=user_id_to_manage,
+                text="😔 На жаль, ваш запит на доступ до бота було відхилено."
+            )
+        except Exception as e:
+            logger.error(f"Не вдалося надіслати повідомлення відхиленому користувачу {user_id_to_manage}: {e}")
+
+    else:
+        logger.warning(f"Невідома дія в callback_data: {query.data}")
+        await query.edit_message_text(text="Помилка: Невідома дія.")
+
+
+def main() -> None:
+    logger.info("Starting main function...")
+
+    # load_user_data() # Додамо пізніше
+
+    logger.info("Starting Flask server in a separate thread...")
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    logger.info("Flask thread started.")
+
+    logger.info("Setting up Telegram bot application...")
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_admin_callback, pattern='^(approve|reject)_'))
+
+    # Додамо обробники аудіо тут...
+
+    logger.info("Starting Telegram bot polling...")
+    application.run_polling()
+
+    # save_user_data() # Додамо пізніше
+    logger.info("Telegram bot polling stopped.")
+
+
+if __name__ == '__main__':
+    main()
